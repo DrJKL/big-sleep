@@ -12,7 +12,7 @@ import subprocess
 import signal
 from datetime import datetime
 from pathlib import Path
-from tqdm import tqdm, trange
+from tqdm import trange
 from collections import namedtuple
 
 from big_sleep.biggan import BigGAN
@@ -226,8 +226,7 @@ class Imagine(nn.Module):
         torch_deterministic = False,
         max_classes = None,
         class_temperature = 2.,
-        save_date_time = False,
-        save_best = False
+        save_date_time = False
     ):
         super().__init__()
 
@@ -260,18 +259,13 @@ class Imagine(nn.Module):
 
         self.save_progress = save_progress
         self.save_date_time = save_date_time
-
-        self.save_best = save_best
-        self.current_best_score = 0
-
         self.open_folder = open_folder
-        self.total_image_updates = (self.epochs * self.iterations) / self.save_every
 
         self.set_text(text)
 
     def set_text(self, text):
         self.text = text
-        textpath = self.text.replace(' ','_')[:255]
+        textpath = self.text.replace(' ','_').split('_')[0]
         if self.save_date_time:
             textpath = datetime.now().strftime("%y%m%d-%H%M%S-") + textpath
 
@@ -297,44 +291,34 @@ class Imagine(nn.Module):
 
         if (i + 1) % self.save_every == 0:
             with torch.no_grad():
-                top_score, best = torch.topk(losses[2], k = 1, largest = False)
+                best = torch.topk(losses[2], k = 1, largest = False)[1]
                 image = self.model.model()[best].cpu()
-
                 save_image(image, str(self.filename))
-                if pbar is not None:
-                    pbar.update(1)
+                update_message = f'image updated at "./{str(self.filename)}" ({i})'
+                if pbar is None:
+                    print(update_message)
                 else:
-                    print(f'image updated at "./{str(self.filename)}"')
-                    
+                    pbar.write(update_message)
 
                 if self.save_progress:
                     total_iterations = epoch * self.iterations + i
                     num = total_iterations // self.save_every
                     save_image(image, Path(f'./{self.textpath}.{num}.png'))
 
-                if self.save_best and top_score.item() < self.current_best_score:
-                    self.current_best_score = top_score.item()
-                    save_image(image, Path(f'./{self.textpath}.best.png'))
-
         return total_loss
 
     def forward(self):
         print(f'Imagining "{self.text}" from the depths of my weights...')
 
-        self.model(self.encoded_text) # one warmup step due to issue with CLIP and CUDA
-
         if self.open_folder:
             open_folder('./')
             self.open_folder = False
 
-        image_pbar = tqdm(total=self.total_image_updates, desc='image update', position=2, leave=True)
-        pbar = trange(self.iterations, desc='   iteration', position=1, leave=True)
-        for epoch in trange(self.epochs, desc = '      epochs', position=0, leave=True):
-            pbar.reset()
-            image_pbar.update(0)
+        for epoch in trange(self.epochs, desc = 'epochs', position=0, leave=True):
+            pbar = trange(self.iterations, desc='iteration', position=0, leave=True)
             for i in pbar:
-                loss = self.train_step(epoch, i, image_pbar)
-                pbar.set_description(f'loss: {loss.item():04.2f}')
+                loss = self.train_step(epoch, i, pbar)
+                pbar.set_description(f'loss: {loss.item():.2f}')
 
                 if terminate:
                     print('detecting keyboard interrupt, gracefully exiting')
